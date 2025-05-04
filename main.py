@@ -176,12 +176,17 @@ data = load_data()
 with st.sidebar:
     st.header("Filters")
 
-    # Date range filter
-    min_date = data['Contract Date'].min().date()
+    # Date range filter with default minimum date of January 1, 2022
+    min_date_dataset = data['Contract Date'].min().date()  # Keep track of actual min date in dataset
+    default_min_date = datetime(2022, 1, 1).date()  # Set default minimum to Jan 1, 2022
     max_date = data['Contract Date'].max().date()
 
-    start_date = st.date_input("Start Date", min_date, min_value=min_date, max_value=max_date)
-    end_date = st.date_input("End Date", max_date, min_value=min_date, max_value=max_date)
+    # Use the later of dataset min or Jan 1, 2022 as the default start date
+    default_start_date = max(min_date_dataset, default_min_date)
+
+    # Set the date input widgets with the appropriate defaults
+    start_date = st.date_input("Start Date", default_start_date, min_value=min_date_dataset, max_value=max_date)
+    end_date = st.date_input("End Date", max_date, min_value=min_date_dataset, max_value=max_date)
 
     # Project filter
     projects = ["All"] + sorted(data["Project"].unique().tolist())
@@ -394,42 +399,6 @@ with tab2:
         # Filter out any rows with non-numeric bedroom values
         bedroom_data = filtered_data[pd.to_numeric(filtered_data['Bedrooms'], errors='coerce').notna()]
 
-        if not bedroom_data.empty:
-            # Sales by bedroom count
-            bedroom_sales = bedroom_data.groupby('Bedrooms').agg(
-                {'Contract Amount': ['sum', 'mean', 'count'], 'Total Covered': 'mean'}
-            ).reset_index()
-            bedroom_sales.columns = ['Bedrooms', 'Total Sales', 'Average Price', 'Units Sold', 'Average Size']
-            bedroom_sales['Price per m²'] = bedroom_sales['Average Price'] / bedroom_sales['Average Size'].replace(0,
-                                                                                                                   np.nan)
-
-            # Create pie chart for bedroom distribution
-            fig6 = px.pie(
-                bedroom_sales,
-                values='Units Sold',
-                names='Bedrooms',
-                title='Units Sold by Bedroom Count',
-                hole=0.4
-            )
-            fig6.update_traces(textinfo='percent+label')
-
-            # Bar chart for average price by bedroom
-            fig7 = px.bar(
-                bedroom_sales,
-                x='Bedrooms',
-                y='Average Price',
-                title='Average Price by Bedroom Count',
-                text_auto='.2s'
-            )
-
-            col1, col2 = st.columns(2)
-            with col1:
-                st.plotly_chart(fig6, use_container_width=True)
-            with col2:
-                st.plotly_chart(fig7, use_container_width=True)
-        else:
-            st.info("No bedroom data available for the selected filters.")
-
         # Create monthly average price per m²
         monthly_price_m2 = filtered_data.groupby(pd.to_datetime(filtered_data['Contract Date']).dt.strftime('%Y-%m'))[
             ['m²']].mean().reset_index()
@@ -467,70 +436,90 @@ with tab3:
         map_data = filtered_data.dropna(subset=['Latitude', 'Longitude'])
 
         if not map_data.empty:
-            # Use a custom color scale based on contract amount
-            map_data['size'] = np.sqrt(map_data['Contract Amount']) / 100  # Scale the point size
-
             # Custom location for analyzed plot
-            custom_latitude = 34.707233  # Replace with your location's latitude
-            custom_longitude = 33.053359  # Replace with your location's longitude
+            custom_latitude = 34.685930
+            custom_longitude = 32.622262
 
-            # Add a new row to project_locations to represent your plot
-            custom_plot = pd.DataFrame({
-                'Project': ['Agios Athanasios 419'],
-                'Latitude': [custom_latitude],
-                'Longitude': [custom_longitude],
-                'Total Sales': [0],  # No sales (specific to the plot)
-                'Units Sold': [0],  # No units
-                'Price per m²': [None],  # Non-applicable
-                'size': [10]  # Fixed marker size for visibility or adjust as needed
-            })
-
-            # Group by project and get average coordinates and total sales
-            project_locations = map_data.groupby('Project').agg({
-                'Latitude': 'mean',
-                'Longitude': 'mean',
-                'Contract Amount': ['sum', 'count']
+            # Process project locations
+            project_locations = map_data.copy()
+            project_locations = project_locations.groupby(['Project', 'Latitude', 'Longitude']).agg({
+                'Contract Amount': ['sum', 'count'],
+                'm²': ['mean']
             }).reset_index()
 
-            project_locations.columns = ['Project', 'Latitude', 'Longitude', 'Total Sales', 'Units Sold']
+            project_locations.columns = ['Project', 'Latitude', 'Longitude', 'Total Sales', 'Units Sold',
+                                         'Price per m²']
             project_locations['size'] = np.sqrt(project_locations['Total Sales']) / 100
 
             # Format total sales values with commas for hover data
             project_locations['Total Sales (Euro)'] = project_locations['Total Sales'].apply(
                 lambda x: f"{x:,.2f} €")
+            project_locations['Price per m² (Euro)'] = project_locations['Price per m²'].apply(
+                lambda x: f"{x:,.2f} €/m²" if pd.notna(x) else "N/A")
 
-            # Combine your plot with the existing project locations
-            all_locations = pd.concat([project_locations, custom_plot], ignore_index=True)
+            # Create base map figure
+            fig9 = go.Figure()
 
-            # Create the concentration map
-            fig9 = px.scatter_mapbox(
-                all_locations,
-                lat="Latitude",
-                lon="Longitude",
-                hover_name="Project",
-                hover_data={
-                    "Total Sales (Euro)": True,
-                    "Units Sold": True,
-                    "Latitude": False,
-                    "Longitude": False,
-                    "size": False
-                },
-                color="Total Sales",
-                size="size",
-                size_max=25,
-                zoom=13,
-                height=600,
-                color_continuous_scale=px.colors.sequential.Plasma
-            )
+            # Add the regular data points
+            fig9.add_trace(go.Scattermapbox(
+                lat=project_locations['Latitude'],
+                lon=project_locations['Longitude'],
+                mode='markers',
+                marker=dict(
+                    size=project_locations['size'],
+                    color=project_locations['Total Sales'],
+                    colorscale='Plasma',
+                    showscale=True,
+                    sizemode='diameter',
+                    sizeref=2,
+                    sizemin=4,
+                    opacity=0.8
+                ),
+                text=project_locations['Project'],
+                hoverinfo='text',
+                hovertemplate='<b>%{text}</b><br>' +
+                              'Total Sales: %{customdata[0]}<br>' +
+                              'Units Sold: %{customdata[1]}<br>' +
+                              'Price per m²: %{customdata[2]}<extra></extra>',
+                customdata=np.stack((
+                    project_locations['Total Sales (Euro)'],
+                    project_locations['Units Sold'],
+                    project_locations['Price per m² (Euro)']
+                ), axis=1)
+            ))
 
-            # Update map style
+            # Add the custom marker with high z-index to ensure it's on top
+            fig9.add_trace(go.Scattermapbox(
+                lat=[custom_latitude],
+                lon=[custom_longitude],
+                mode='markers',
+                marker=dict(
+                    size=20,
+                    color='red',
+                    opacity=1.0
+                ),
+                text=['Project Aphrodite'],
+                hoverinfo='text',
+                hovertemplate='<b>Project Aphrodite</b><br>Custom Location<extra></extra>',
+                name='Project Aphrodite'
+            ))
+
+            # Set the map layout
             fig9.update_layout(
                 mapbox_style="open-street-map",
-                margin={"r": 0, "t": 0, "l": 0, "b": 0}
+                mapbox=dict(
+                    center=dict(lat=34.77, lon=32.75),
+                    zoom=9
+                ),
+                margin={"r": 0, "t": 0, "l": 0, "b": 0},
+                height=600
             )
 
             # Display the map
             st.plotly_chart(fig9, use_container_width=True)
+
+            # Add an explanation of what the custom marker represents
+            st.info("The red marker represents the location of 'Project Aphrodite'")
         else:
             st.info("No location data available for the selected filters.")
 
