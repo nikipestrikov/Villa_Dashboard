@@ -508,8 +508,8 @@ with tab3:
             fig9.update_layout(
                 mapbox_style="open-street-map",
                 mapbox=dict(
-                    center=dict(lat=34.77, lon=32.75),
-                    zoom=9
+                    center=dict(lat=custom_latitude, lon=custom_longitude),
+                    zoom=14
                 ),
                 margin={"r": 0, "t": 0, "l": 0, "b": 0},
                 height=600
